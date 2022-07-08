@@ -1,0 +1,14 @@
+.idea
+data/model_data/
+**/__pycache__
+data/output/
+data/result_output/
+CBLUEDatasets/CHIP-CDN/
+CBLUEDatasets/CHIP-CTC/
+CBLUEDatasets/CHIP-STS/
+CBLUEDatasets/CMeEE/
+CBLUEDatasets/CMeIE/
+CBLUEDatasets/KUAKE-QIC/
+CBLUEDatasets/KUAKE-QQR/
+CBLUEDatasets/KUAKE-QTR/
+
