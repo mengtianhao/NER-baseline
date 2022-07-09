@@ -1,17 +1,18 @@
 import os
 import sys
-from transformers import BertTokenizer, BertForTokenClassification, AlbertForTokenClassification
+from transformers import BertTokenizer, BertForTokenClassification, AlbertForTokenClassification, BertModel
 from cblue.data.data_process import DataProcessor
 from cblue.data.dataset import Dataset
 from cblue.trainer.train import MyTrainer
 from cblue.utils import init_logger, seed_everything
 from cblue.models import ZenNgramDict, ZenForTokenClassification
 from transformers import logging
+
 logging.set_verbosity_error()
 sys.path.append('.')
 
 
-def main(config, do_train=False, do_predict=False,):
+def main(config, do_train=False, do_predict=False, ):
     if not os.path.exists(config.output_dir):
         os.mkdir(config.output_dir)
     output_dir = os.path.join(config.output_dir, config.model_name)
@@ -27,10 +28,14 @@ def main(config, do_train=False, do_predict=False,):
 
     dataset_class, data_processor_class = Dataset, DataProcessor
 
-    if config.model_type == 'bert':
+    if config.model_type == 'bert' and config.classify_name == "BertForTokenClassification":
         tokenizer_class, model_class = BertTokenizer, BertForTokenClassification
-    elif config.model_type == 'roberta':
+    elif config.model_type == 'bert' and config.classify_name == "CRF":
+        tokenizer_class, model_class = BertTokenizer, BertModel
+    elif config.model_type == 'roberta' and config.classify_name == "BertForTokenClassification":
         tokenizer_class, model_class = BertTokenizer, BertForTokenClassification
+    elif config.model_type == 'roberta' and config.classify_name == "CRF":
+        tokenizer_class, model_class = BertTokenizer, BertModel
     elif config.model_type == 'albert':
         tokenizer_class, model_class = BertTokenizer, AlbertForTokenClassification
     elif config.model_type == 'zen':
@@ -52,12 +57,14 @@ def main(config, do_train=False, do_predict=False,):
                                       model_type=config.model_type, ngram_dict=ngram_dict, max_length=config.max_length)
         eval_dataset = dataset_class(eval_samples, data_processor, tokenizer, mode='eval',
                                      model_type=config.model_type, ngram_dict=ngram_dict, max_length=config.max_length)
-
-        model = model_class.from_pretrained(os.path.join(config.model_dir, config.model_name), num_labels=data_processor.num_labels)
+        print(data_processor.label2id)
+        model = model_class.from_pretrained(os.path.join(config.model_dir, config.model_name),
+                                            num_labels=data_processor.num_labels)
 
         trainer = MyTrainer(config=config, model=model, data_processor=data_processor,
                             tokenizer=tokenizer, train_dataset=train_dataset, eval_dataset=eval_dataset,
-                            logger=logger, model_class=model_class, ngram_dict=ngram_dict)
+                            logger=logger, model_class=model_class, ngram_dict=ngram_dict,
+                            num_labels=data_processor.num_labels)
 
         global_step, best_step = trainer.train()
 
@@ -73,7 +80,7 @@ def main(config, do_train=False, do_predict=False,):
 
         test_dataset = dataset_class(test_samples, data_processor, tokenizer, mode='test', ngram_dict=ngram_dict,
                                      max_length=config.max_length, model_type=config.model_type)
-            
+
         model = model_class.from_pretrained(output_dir, num_labels=data_processor.num_labels)
         trainer = MyTrainer(config=config, model=model, data_processor=data_processor,
                             tokenizer=tokenizer, logger=logger, model_class=model_class, ngram_dict=ngram_dict)

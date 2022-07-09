@@ -1,6 +1,7 @@
 import os
 import numpy as np
 import torch
+import torch.nn as nn
 from torch.optim import AdamW
 from transformers import get_linear_schedule_with_warmup
 from torch.utils.data import Dataset, DataLoader
@@ -8,6 +9,7 @@ from cblue.utils import ProgressBar
 from cblue.metrics.metrics import metric
 from cblue.metrics.commit import commit_prediction
 from cblue.models import save_zen_model
+from torch_utils.CRF_layers import CRFLayer
 
 
 class Trainer(object):
@@ -50,7 +52,18 @@ class Trainer(object):
         num_training_steps = len(train_dataloader) * config.epochs
         num_warmup_steps = num_training_steps * config.warmup_proportion
         num_examples = len(train_dataloader.dataset)
-
+        # 打印模型参数
+        for name, param in model.named_parameters():
+            print(name, param.size())
+        # 不冻结的部分参数
+        unfreeze_layers = ['encoder.layer.10', 'encoder.layer.11', 'classifier', 'pooler']
+        for name, param in model.named_parameters():
+            param.requires_grad = False
+            for ele in unfreeze_layers:
+                if ele in name:
+                    param.requires_grad = True
+                    break
+        # 学习率不下降的参数
         no_decay = ['bias', 'LayerNorm.weight']
         optimizer_grouped_parameters = [
             {'params': [p for n, p in model.named_parameters() if not any(nd in n for nd in no_decay)],
@@ -159,6 +172,7 @@ class MyTrainer(Trainer):
             tokenizer,
             logger,
             model_class,
+            num_labels,
             train_dataset=None,
             eval_dataset=None,
             ngram_dict=None
@@ -174,6 +188,9 @@ class MyTrainer(Trainer):
             model_class=model_class,
             ngram_dict=ngram_dict
         )
+        self.base_output = nn.Linear(config.hidden_size, num_labels)
+        # crf
+        # self.crf = CRFLayer(self.num_labels, params)
 
     def training_step(self, model, item):
         model.train()
@@ -194,10 +211,21 @@ class MyTrainer(Trainer):
                             labels=labels, ngram_ids=input_ngram_ids, ngram_positions=ngram_position_matrix,
                             ngram_attention_mask=ngram_attention_mask, ngram_token_type_ids=ngram_token_type_ids)
         else:
-            outputs = model(labels=labels.to(torch.int64), input_ids=input_ids, token_type_ids=token_type_ids,
-                            attention_mask=attention_mask)
+            if self.config.classify_name == 'CRF':
+                # 使用BertModel
+                sequence_output, pooled_output, encoded_layers = model(input_ids=input_ids,
+                                                                       token_type_ids=token_type_ids,
+                                                                       attention_mask=attention_mask)
+                feats = self.base_output(sequence_output).transpose(1, 0)
+                forward_score = self.crf(feats, attention_mask.transpose(1, 0))
+                gold_score = self.crf.score_sentence(feats, labels.transpose(1, 0),
+                                                     attention_mask.transpose(1, 0))
+                loss = (forward_score - gold_score).mean()
+            else:
+                outputs = model(labels=labels.to(torch.int64), input_ids=input_ids, token_type_ids=token_type_ids,
+                                attention_mask=attention_mask)
 
-        loss = outputs[0]
+                loss = outputs[0]
         loss.backward()
 
         return loss.detach()
@@ -235,7 +263,7 @@ class MyTrainer(Trainer):
                                     ngram_token_type_ids=ngram_token_type_ids,
                                     ngram_attention_mask=ngram_attention_mask)
                 else:
-                    outputs = model(labels=labels, input_ids=input_ids, token_type_ids=token_type_ids,
+                    outputs = model(labels=labels.to(torch.int64), input_ids=input_ids, token_type_ids=token_type_ids,
                                     attention_mask=attention_mask)
 
                 # outputs = model(labels=labels, **inputs)
