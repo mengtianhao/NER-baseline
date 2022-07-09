@@ -2,7 +2,7 @@ import os
 from cblue.utils import load_json, load_dict, write_dict
 
 
-class EEDataProcessor(object):
+class DataProcessor(object):
     def __init__(self, root, is_lower=True, no_entity_label='O'):
         self.task_data_dir = os.path.join(root, 'CMeEE')
         self.train_path = os.path.join(self.task_data_dir, 'CMeEE_train.json')

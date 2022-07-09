@@ -2,7 +2,7 @@ import os
 import json
 
 
-def ee_commit_prediction(dataset, preds, output_dir):
+def commit_prediction(dataset, preds, output_dir):
     orig_text = dataset.orig_text
 
     pred_result = []

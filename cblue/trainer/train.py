@@ -5,8 +5,8 @@ from torch.optim import AdamW
 from transformers import get_linear_schedule_with_warmup
 from torch.utils.data import Dataset, DataLoader
 from cblue.utils import ProgressBar
-from cblue.metrics import ee_metric
-from cblue.metrics import ee_commit_prediction
+from cblue.metrics.metrics import metric
+from cblue.metrics.commit import commit_prediction
 from cblue.models import save_zen_model
 
 
@@ -150,7 +150,7 @@ class Trainer(object):
         )
 
 
-class EETrainer(Trainer):
+class MyTrainer(Trainer):
     def __init__(
             self,
             config,
@@ -163,7 +163,7 @@ class EETrainer(Trainer):
             eval_dataset=None,
             ngram_dict=None
     ):
-        super(EETrainer, self).__init__(
+        super(MyTrainer, self).__init__(
             config=config,
             model=model,
             data_processor=data_processor,
@@ -253,7 +253,7 @@ class EETrainer(Trainer):
                 preds = np.append(preds, active_logits.detach().cpu().numpy(), axis=0)
                 eval_labels = np.append(eval_labels, active_labels.detach().cpu().numpy(), axis=0)
 
-        p, r, f1, _ = ee_metric(preds, eval_labels)
+        p, r, f1, _ = metric(preds, eval_labels)
         logger.info("%s-%s precision: %s - recall: %s - f1 score: %s", config.task_name, config.model_name, p, r, f1)
         return f1
 
@@ -272,7 +272,7 @@ class EETrainer(Trainer):
         for step, item in enumerate(test_dataloader):
             model.eval()
 
-            input_ids = item[0].to(self.onfig.device)
+            input_ids = item[0].to(self.config.device)
             token_type_ids = item[1].to(self.config.device)
             attention_mask = item[2].to(self.config.device)
 
@@ -309,7 +309,7 @@ class EETrainer(Trainer):
         test_inputs = test_dataset.texts
         predictions = [pred[1:-1] for pred in predictions]
         predicts = self.data_processor.extract_result(predictions, test_inputs)
-        ee_commit_prediction(dataset=test_dataset, preds=predicts, output_dir=config.result_output_dir)
+        commit_prediction(dataset=test_dataset, preds=predicts, output_dir=config.result_output_dir)
 
     def _save_checkpoint(self, model, step):
         output_dir = os.path.join(self.config.output_dir, 'checkpoint-{}'.format(step))
@@ -328,11 +328,12 @@ class EETrainer(Trainer):
     def _save_best_checkpoint(self, best_step):
         model = self.model_class.from_pretrained(os.path.join(self.config.output_dir, f'checkpoint-{best_step}'),
                                                  num_labels=self.data_processor.num_labels)
+        output_dir = os.path.join(self.config.output_dir, self.config.model_name)
         if self.config.model_type == 'zen':
-            save_zen_model(self.config.output_dir, model=model, tokenizer=self.tokenizer,
+            save_zen_model(output_dir, model=model, tokenizer=self.tokenizer,
                            ngram_dict=self.ngram_dict, args=self.config)
         else:
-            model.save_pretrained(self.config.output_dir)
-            torch.save(self.config, os.path.join(self.config.output_dir, 'training_config.bin'))
-            self.tokenizer.save_vocabulary(save_directory=self.config.output_dir)
-        self.logger.info('Saving models checkpoint to %s', self.config.output_dir)
+            model.save_pretrained(output_dir)
+            torch.save(self.config, os.path.join(output_dir, 'training_config.bin'))
+            self.tokenizer.save_vocabulary(save_directory=output_dir)
+        self.logger.info('Saving models checkpoint to %s', output_dir)

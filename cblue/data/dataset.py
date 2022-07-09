@@ -4,7 +4,7 @@ from torch.utils.data import Dataset
 from cblue.models import convert_examples_to_features_for_tokens
 
 
-class EEDataset(Dataset):
+class Dataset(Dataset):
     def __init__(
             self,
             samples,
@@ -16,7 +16,7 @@ class EEDataset(Dataset):
             model_type='bert',
             ngram_dict=None
     ):
-        super(EEDataset, self).__init__()
+        super(Dataset, self).__init__()
 
         self.orig_text = samples['orig_text']
         self.texts = samples['text']
