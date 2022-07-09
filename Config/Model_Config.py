@@ -1,6 +1,7 @@
 import torch
 import os
 
+
 class Model_config:
     def __init__(self, task_name, model_name="chinese-bert-wwm-ext"):
         # 项目路径
