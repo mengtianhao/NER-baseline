@@ -26,7 +26,9 @@ def main(config, do_train=False, do_predict=False, ):
 
     if not os.path.exists(config.result_output_dir):
         os.mkdir(config.result_output_dir)
-    # print(output_dir)
+    result_output_dir = os.path.join(config.result_output_dir, config.classify_name)
+    if not os.path.exists(result_output_dir):
+        os.mkdir(result_output_dir)
 
     logger = init_logger(os.path.join(output_dir, f'{config.task_name}_{config.model_name}.log'))
 

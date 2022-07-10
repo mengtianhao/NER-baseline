@@ -359,7 +359,8 @@ class MyTrainer(Trainer):
         test_inputs = test_dataset.texts
         predictions = [pred[1:-1] for pred in predictions]
         predicts = self.data_processor.extract_result(predictions, test_inputs)
-        commit_prediction(dataset=test_dataset, preds=predicts, output_dir=config.result_output_dir)
+        commit_prediction(dataset=test_dataset, preds=predicts,
+                          output_dir=os.path.join(config.result_output_dir, config.classify_name))
 
     def _save_checkpoint(self, model, step):
         output_dir = os.path.join(self.config.output_dir, self.config.classify_name, 'checkpoint-{}'.format(step))
