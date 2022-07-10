@@ -12,7 +12,6 @@ class Dataset(Dataset):
             tokenizer,
             mode='train',
             max_length=128,
-            ignore_label=-100,
             model_type='bert',
             ngram_dict=None
     ):
@@ -27,7 +26,6 @@ class Dataset(Dataset):
 
         self.data_processor = data_processor
         self.tokenizer = tokenizer
-        self.ignore_label = ignore_label
         self.max_length = max_length
         self.mode = mode
         self.ngram_dict = ngram_dict
@@ -44,8 +42,10 @@ class Dataset(Dataset):
         if self.mode != "test":
             label = [self.data_processor.label2id[label_] for label_ in
                      self.labels[idx].split('\002')]  # find index from label list
-            label = ([-100] + label[:self.max_length - 2] + [-100] +
-                     [self.ignore_label] * self.max_length)[:self.max_length]  # use ignore_label padding CLS+label+SEP
+            label = ([self.data_processor.label2id['[CLS]']] +
+                     label[:self.max_length - 2] +
+                     [self.data_processor.label2id['[SEP]']] +
+                     [self.data_processor.label2id['[PAD]']] * self.max_length)[:self.max_length]  # use ignore_label padding CLS+label+SEP
             if self.model_type == 'zen':
                 return inputs['input_ids'], inputs['token_type_ids'], \
                        inputs['attention_mask'], torch.tensor(label), inputs['input_ngram_ids'], \

@@ -9,7 +9,7 @@ from cblue.utils import ProgressBar
 from cblue.metrics.metrics import metric
 from cblue.metrics.commit import commit_prediction
 from cblue.models import save_zen_model
-from torch_utils.CRF_layers import CRFLayer
+from torch_utils.MyCRF import MyCRF
 
 
 class Trainer(object):
@@ -23,7 +23,8 @@ class Trainer(object):
             model_class,
             train_dataset=None,
             eval_dataset=None,
-            ngram_dict=None
+            ngram_dict=None,
+            best_score=0.0
     ):
 
         self.config = config
@@ -41,6 +42,8 @@ class Trainer(object):
         self.model_class = model_class
         self.ngram_dict = ngram_dict
 
+        self.best_score = best_score
+
     def train(self):
         config = self.config
         logger = self.logger
@@ -53,8 +56,8 @@ class Trainer(object):
         num_warmup_steps = num_training_steps * config.warmup_proportion
         num_examples = len(train_dataloader.dataset)
         # 打印模型参数
-        for name, param in model.named_parameters():
-            print(name, param.size())
+        # for name, param in model.named_parameters():
+        #     print(name, param.size())
         # 不冻结的部分参数
         unfreeze_layers = ['encoder.layer.10', 'encoder.layer.11', 'classifier', 'pooler']
         for name, param in model.named_parameters():
@@ -84,7 +87,7 @@ class Trainer(object):
 
         global_step = 0
         best_step = None
-        best_score = .0
+        best_score = self.best_score
         cnt_patience = 0
         for i in range(config.epochs):
             pbar = ProgressBar(n_total=len(train_dataloader), desc='Training')
@@ -107,6 +110,7 @@ class Trainer(object):
                     score = self.evaluate(model)
                     if score > best_score:
                         best_score = score
+                        self.best_score = best_score
                         best_step = global_step
                         cnt_patience = 0
                         self._save_checkpoint(model, global_step)
@@ -175,7 +179,8 @@ class MyTrainer(Trainer):
             num_labels,
             train_dataset=None,
             eval_dataset=None,
-            ngram_dict=None
+            ngram_dict=None,
+            best_score=0.0
     ):
         super(MyTrainer, self).__init__(
             config=config,
@@ -186,11 +191,11 @@ class MyTrainer(Trainer):
             eval_dataset=eval_dataset,
             logger=logger,
             model_class=model_class,
-            ngram_dict=ngram_dict
+            ngram_dict=ngram_dict,
+            best_score=best_score
         )
-        self.base_output = nn.Linear(config.hidden_size, num_labels)
-        # crf
-        # self.crf = CRFLayer(self.num_labels, params)
+        self.base_output = nn.Linear(config.hidden_size, num_labels).to(config.device)
+        self.crf = MyCRF(num_labels).to(config.device)
 
     def training_step(self, model, item):
         model.train()
@@ -211,21 +216,17 @@ class MyTrainer(Trainer):
                             labels=labels, ngram_ids=input_ngram_ids, ngram_positions=ngram_position_matrix,
                             ngram_attention_mask=ngram_attention_mask, ngram_token_type_ids=ngram_token_type_ids)
         else:
-            if self.config.classify_name == 'CRF':
-                # 使用BertModel
-                sequence_output, pooled_output, encoded_layers = model(input_ids=input_ids,
-                                                                       token_type_ids=token_type_ids,
-                                                                       attention_mask=attention_mask)
-                feats = self.base_output(sequence_output).transpose(1, 0)
-                forward_score = self.crf(feats, attention_mask.transpose(1, 0))
-                gold_score = self.crf.score_sentence(feats, labels.transpose(1, 0),
-                                                     attention_mask.transpose(1, 0))
-                loss = (forward_score - gold_score).mean()
-            else:
+            if self.config.classify_name != "CRF":
                 outputs = model(labels=labels.to(torch.int64), input_ids=input_ids, token_type_ids=token_type_ids,
                                 attention_mask=attention_mask)
-
                 loss = outputs[0]
+            else:
+                outputs = model(input_ids=input_ids, token_type_ids=token_type_ids,
+                                attention_mask=attention_mask)
+                outputs = self.base_output(outputs[0])
+                label_mask = (attention_mask == 1)
+                loss, logits = self.crf(sentence=outputs, labels=labels.to(torch.int64), mask=label_mask, is_test=False)
+
         loss.backward()
 
         return loss.detach()
@@ -263,15 +264,25 @@ class MyTrainer(Trainer):
                                     ngram_token_type_ids=ngram_token_type_ids,
                                     ngram_attention_mask=ngram_attention_mask)
                 else:
-                    outputs = model(labels=labels.to(torch.int64), input_ids=input_ids, token_type_ids=token_type_ids,
-                                    attention_mask=attention_mask)
+                    if self.config.classify_name != "CRF":
+                        outputs = model(labels=labels.to(torch.int64), input_ids=input_ids,
+                                        token_type_ids=token_type_ids,
+                                        attention_mask=attention_mask)
+                        loss, logits = outputs[:2]
+                        logits = logits.argmax(dim=-1)
+                        # print(logits)
+                    else:
+                        outputs = model(input_ids=input_ids, token_type_ids=token_type_ids,
+                                        attention_mask=attention_mask)
+                        outputs = self.base_output(outputs[0])
+                        label_mask = (attention_mask == 1)
+                        loss, logits = self.crf(sentence=outputs, labels=labels.to(torch.int64), mask=label_mask,
+                                                is_test=False)
+                        logits = list(map(lambda l: l + [0] * (self.config.max_length - len(l)), logits))
+                        logits = torch.Tensor(logits)
 
-                # outputs = model(labels=labels, **inputs)
-                loss, logits = outputs[:2]
-                # active_index = inputs['attention_mask'].view(-1) == 1
                 active_index = attention_mask.view(-1) == 1
                 active_labels = labels.view(-1)[active_index]
-                logits = logits.argmax(dim=-1)
                 active_logits = logits.view(-1)[active_index]
 
             if preds is None:
@@ -318,16 +329,27 @@ class MyTrainer(Trainer):
                                     ngram_token_type_ids=ngram_token_type_ids,
                                     ngram_attention_mask=ngram_attention_mask)
                 else:
-                    outputs = model(input_ids=input_ids, token_type_ids=token_type_ids,
-                                    attention_mask=attention_mask)
+                    if self.config.classify_name != "CRF":
+                        outputs = model(input_ids=input_ids, token_type_ids=token_type_ids,
+                                        attention_mask=attention_mask)
+                    else:
+                        outputs = model(input_ids=input_ids, token_type_ids=token_type_ids,
+                                        attention_mask=attention_mask)
+                        outputs = self.base_output(outputs[0])
 
                 if config.model_type == 'zen':
                     logits = outputs.detach()
-                else:
+                    preds = logits.argmax(dim=-1).cpu()
+                elif self.config.classify_name != "CRF":
                     logits = outputs[0].detach()
-                # active_index = (inputs['attention_mask'] == 1).cpu()
+                    preds = logits.argmax(dim=-1).cpu()
+                else:
+                    label_mask = (attention_mask == 1)
+                    logits = self.crf(sentence=outputs, mask=label_mask, is_test=True)
+                    logits = list(map(lambda l: l + [0] * (self.config.max_length - len(l)), logits))
+                    preds = torch.Tensor(logits)
+
                 active_index = attention_mask == 1
-                preds = logits.argmax(dim=-1).cpu()
 
                 for i in range(len(active_index)):
                     predictions.append(preds[i][active_index[i]].tolist())
@@ -340,7 +362,7 @@ class MyTrainer(Trainer):
         commit_prediction(dataset=test_dataset, preds=predicts, output_dir=config.result_output_dir)
 
     def _save_checkpoint(self, model, step):
-        output_dir = os.path.join(self.config.output_dir, 'checkpoint-{}'.format(step))
+        output_dir = os.path.join(self.config.output_dir, self.config.classify_name, 'checkpoint-{}'.format(step))
         if not os.path.exists(output_dir):
             os.makedirs(output_dir)
 
@@ -354,14 +376,17 @@ class MyTrainer(Trainer):
         self.logger.info('Saving models checkpoint to %s', output_dir)
 
     def _save_best_checkpoint(self, best_step):
-        model = self.model_class.from_pretrained(os.path.join(self.config.output_dir, f'checkpoint-{best_step}'),
+        model = self.model_class.from_pretrained(os.path.join(self.config.output_dir,
+                                                              self.config.classify_name,
+                                                              f'checkpoint-{best_step}'),
                                                  num_labels=self.data_processor.num_labels)
-        output_dir = os.path.join(self.config.output_dir, self.config.model_name)
+        output_dir = os.path.join(self.config.output_dir, self.config.classify_name, self.config.model_name)
         if self.config.model_type == 'zen':
             save_zen_model(output_dir, model=model, tokenizer=self.tokenizer,
                            ngram_dict=self.ngram_dict, args=self.config)
         else:
             model.save_pretrained(output_dir)
-            torch.save(self.config, os.path.join(output_dir, 'training_config.bin'))
+            torch.save({'best_score': self.best_score, 'config': self.config},
+                       os.path.join(output_dir, 'training_config.bin'))
             self.tokenizer.save_vocabulary(save_directory=output_dir)
         self.logger.info('Saving models checkpoint to %s', output_dir)

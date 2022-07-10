@@ -40,6 +40,8 @@ class DataProcessor(object):
             labels = [self.no_entity_label]
             for label in label_set:
                 labels.extend(["B-{}".format(label), "I-{}".format(label)])
+            # 加入额外的辅助标签
+            labels = ['[PAD]', '[CLS]', '[SEP]'] + labels
             label_map = {idx: label for idx, label in enumerate(labels)}
             write_dict(self.label_map_cache_path, label_map)
         self.id2label = label_map
