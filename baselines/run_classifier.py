@@ -9,6 +9,7 @@ from cblue.trainer.train import MyTrainer
 from cblue.utils import init_logger, seed_everything
 from cblue.models import ZenNgramDict, ZenForTokenClassification
 from transformers import logging
+from cblue.models import MyModel
 
 logging.set_verbosity_error()
 sys.path.append('.')
@@ -20,13 +21,19 @@ def main(config, do_train=False, do_predict=False, ):
     output_dir = os.path.join(config.output_dir, config.classify_name)
     if not os.path.exists(output_dir):
         os.mkdir(output_dir)
-    output_dir = os.path.join(config.output_dir, config.classify_name, config.model_name)
+    output_dir = os.path.join(config.output_dir, config.classify_name, config.mid_struct)
+    if not os.path.exists(output_dir):
+        os.mkdir(output_dir)
+    output_dir = os.path.join(config.output_dir, config.classify_name, config.mid_struct, config.model_name)
     if not os.path.exists(output_dir):
         os.mkdir(output_dir)
 
     if not os.path.exists(config.result_output_dir):
         os.mkdir(config.result_output_dir)
     result_output_dir = os.path.join(config.result_output_dir, config.classify_name)
+    if not os.path.exists(result_output_dir):
+        os.mkdir(result_output_dir)
+    result_output_dir = os.path.join(config.result_output_dir, config.classify_name, config.mid_struct)
     if not os.path.exists(result_output_dir):
         os.mkdir(result_output_dir)
 
@@ -50,15 +57,18 @@ def main(config, do_train=False, do_predict=False, ):
         tokenizer_class, model_class = BertTokenizer, ZenForTokenClassification
 
     if do_train:
-        model_save_dir = os.path.join(config.output_dir, config.classify_name, config.model_name)
+        model_save_dir = os.path.join(config.output_dir, config.classify_name, config.mid_struct, config.model_name)
         model_save_path = os.path.join(model_save_dir, 'pytorch_model.bin')
         best_score = 0.0
+        load_paras = None
         if os.path.exists(model_save_path):
             model_file_path = model_save_dir
             checkpoint = torch.load(os.path.join(model_save_dir, 'training_config.bin'))
             best_score = checkpoint['best_score']  # 加载上次的最好的正确率
+            load_paras = checkpoint['pytorch_model.pt']
         else:
             model_file_path = os.path.join(config.model_dir, config.model_name)
+
         tokenizer = tokenizer_class.from_pretrained(model_file_path)
 
         # compatible with 'ZEN' model
@@ -78,7 +88,10 @@ def main(config, do_train=False, do_predict=False, ):
         if config.classify_name != "CRF":
             model = model_class.from_pretrained(model_file_path, num_labels=data_processor.num_labels)
         else:
-            model = model_class.from_pretrained(model_file_path)
+            model = MyModel(config=config, pretrained_class=model_class, pretrained_path=model_file_path,
+                            mid_struct=config.mid_struct, num_labels=data_processor.num_labels)
+            if load_paras is not None:
+                model.load_state_dict(load_paras)
 
         trainer = MyTrainer(config=config, model=model, data_processor=data_processor,
                             tokenizer=tokenizer, train_dataset=train_dataset, eval_dataset=eval_dataset,
@@ -88,6 +101,11 @@ def main(config, do_train=False, do_predict=False, ):
         global_step, best_step = trainer.train()
 
     if do_predict:
+        model_save_dir = os.path.join(config.output_dir, config.classify_name, config.mid_struct, config.model_name)
+        model_file_path = model_save_dir
+        checkpoint = torch.load(os.path.join(model_save_dir, 'training_config.bin'))
+        load_paras = checkpoint['pytorch_model.pt']
+
         tokenizer = tokenizer_class.from_pretrained(output_dir)
 
         ngram_dict = None
@@ -99,16 +117,24 @@ def main(config, do_train=False, do_predict=False, ):
 
         test_dataset = dataset_class(test_samples, data_processor, tokenizer, mode='test', ngram_dict=ngram_dict,
                                      max_length=config.max_length, model_type=config.model_type)
+        #
+        # eval_samples = data_processor.get_dev_sample()
+        # eval_dataset = dataset_class(eval_samples, data_processor, tokenizer, mode='eval',
+        #                              model_type=config.model_type, ngram_dict=ngram_dict, max_length=config.max_length)
+        #
 
         if config.classify_name != "CRF":
             model = model_class.from_pretrained(output_dir, num_labels=data_processor.num_labels)
         else:
-            model = model_class.from_pretrained(output_dir)
+            model = MyModel(config=config, pretrained_class=model_class, pretrained_path=model_file_path,
+                            mid_struct=config.mid_struct, num_labels=data_processor.num_labels)
+            model.load_state_dict(load_paras)
 
         trainer = MyTrainer(config=config, model=model, data_processor=data_processor,
                             tokenizer=tokenizer, logger=logger, model_class=model_class, ngram_dict=ngram_dict,
                             num_labels=data_processor.num_labels)
         trainer.predict(test_dataset=test_dataset, model=model)
+        # trainer.evaluate(model)
 
 
 if __name__ == '__main__':

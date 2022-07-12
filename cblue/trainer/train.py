@@ -10,6 +10,7 @@ from cblue.metrics.metrics import metric
 from cblue.metrics.commit import commit_prediction
 from cblue.models import save_zen_model
 from torch_utils.MyCRF import MyCRF
+from cblue.models.model import MyModel
 
 
 class Trainer(object):
@@ -56,8 +57,8 @@ class Trainer(object):
         num_warmup_steps = num_training_steps * config.warmup_proportion
         num_examples = len(train_dataloader.dataset)
         # 打印模型参数
-        # for name, param in model.named_parameters():
-        #     print(name, param.size())
+        for name, param in model.named_parameters():
+            print(name, param.size())
         # 不冻结的部分参数
         unfreeze_layers = ['encoder.layer.10', 'encoder.layer.11', 'classifier', 'pooler']
         for name, param in model.named_parameters():
@@ -194,7 +195,6 @@ class MyTrainer(Trainer):
             ngram_dict=ngram_dict,
             best_score=best_score
         )
-        self.base_output = nn.Linear(config.hidden_size, num_labels).to(config.device)
         self.crf = MyCRF(num_labels).to(config.device)
 
     def training_step(self, model, item):
@@ -223,7 +223,6 @@ class MyTrainer(Trainer):
             else:
                 outputs = model(input_ids=input_ids, token_type_ids=token_type_ids,
                                 attention_mask=attention_mask)
-                outputs = self.base_output(outputs[0])
                 label_mask = (attention_mask == 1)
                 loss, logits = self.crf(sentence=outputs, labels=labels.to(torch.int64), mask=label_mask, is_test=False)
 
@@ -232,6 +231,7 @@ class MyTrainer(Trainer):
         return loss.detach()
 
     def evaluate(self, model):
+        # model.to(self.config.device)
         config = self.config
         logger = self.logger
         eval_dataloader = self.get_eval_dataloader()
@@ -274,7 +274,6 @@ class MyTrainer(Trainer):
                     else:
                         outputs = model(input_ids=input_ids, token_type_ids=token_type_ids,
                                         attention_mask=attention_mask)
-                        outputs = self.base_output(outputs[0])
                         label_mask = (attention_mask == 1)
                         loss, logits = self.crf(sentence=outputs, labels=labels.to(torch.int64), mask=label_mask,
                                                 is_test=False)
@@ -335,7 +334,6 @@ class MyTrainer(Trainer):
                     else:
                         outputs = model(input_ids=input_ids, token_type_ids=token_type_ids,
                                         attention_mask=attention_mask)
-                        outputs = self.base_output(outputs[0])
 
                 if config.model_type == 'zen':
                     logits = outputs.detach()
@@ -360,34 +358,59 @@ class MyTrainer(Trainer):
         predictions = [pred[1:-1] for pred in predictions]
         predicts = self.data_processor.extract_result(predictions, test_inputs)
         commit_prediction(dataset=test_dataset, preds=predicts,
-                          output_dir=os.path.join(config.result_output_dir, config.classify_name))
+                          output_dir=os.path.join(config.result_output_dir, config.classify_name, config.mid_struct))
 
     def _save_checkpoint(self, model, step):
-        output_dir = os.path.join(self.config.output_dir, self.config.classify_name, 'checkpoint-{}'.format(step))
+        output_dir = os.path.join(self.config.output_dir, self.config.classify_name,
+                                  self.config.mid_struct,
+                                  'checkpoint-{}'.format(step))
         if not os.path.exists(output_dir):
             os.makedirs(output_dir)
-
+        # if self.config.classify_name == "CRF":
+        #     torch.save(model.state_dict(), os.path.join(output_dir, 'pytorch_model.pt'))
         if self.config.model_type == 'zen':
             save_zen_model(output_dir, model=model, tokenizer=self.tokenizer,
                            ngram_dict=self.ngram_dict, args=self.config)
         else:
-            model.save_pretrained(output_dir)
-            torch.save(self.config, os.path.join(output_dir, 'training_config.bin'))
+            if self.config.classify_name == "CRF":
+                model.encoder.save_pretrained(output_dir)
+            else:
+                model.save_pretrained(output_dir)
+            # torch.save(self.config, os.path.join(output_dir, 'training_config.bin'))
+            torch.save({'best_score': self.best_score, 'config': self.config,
+                        'pytorch_model.pt': model.state_dict()},
+                       os.path.join(output_dir, 'training_config.bin'))
             self.tokenizer.save_vocabulary(save_directory=output_dir)
         self.logger.info('Saving models checkpoint to %s', output_dir)
 
     def _save_best_checkpoint(self, best_step):
-        model = self.model_class.from_pretrained(os.path.join(self.config.output_dir,
-                                                              self.config.classify_name,
-                                                              f'checkpoint-{best_step}'),
-                                                 num_labels=self.data_processor.num_labels)
-        output_dir = os.path.join(self.config.output_dir, self.config.classify_name, self.config.model_name)
+        if self.config.classify_name != "CRF":
+            model = self.model_class.from_pretrained(os.path.join(self.config.output_dir,
+                                                                  self.config.classify_name,
+                                                                  self.config.mid_struct,
+                                                                  f'checkpoint-{best_step}'),
+                                                     num_labels=self.data_processor.num_labels)
+        else:
+            model = MyModel(config=self.config, pretrained_class=self.model_class,
+                            pretrained_path=os.path.join(self.config.output_dir, self.config.classify_name,
+                                                         self.config.mid_struct, f'checkpoint-{best_step}'),
+                            mid_struct=self.config.mid_struct, num_labels=self.data_processor.num_labels)
+
+        output_dir = os.path.join(self.config.output_dir, self.config.classify_name,
+                                  self.config.mid_struct,
+                                  self.config.model_name)
+
         if self.config.model_type == 'zen':
             save_zen_model(output_dir, model=model, tokenizer=self.tokenizer,
                            ngram_dict=self.ngram_dict, args=self.config)
         else:
-            model.save_pretrained(output_dir)
-            torch.save({'best_score': self.best_score, 'config': self.config},
+            if self.config.classify_name == "CRF":
+                model.encoder.save_pretrained(output_dir)
+            else:
+                model.save_pretrained(output_dir)
+            # model.save_pretrained(output_dir)
+            torch.save({'best_score': self.best_score, 'config': self.config,
+                        'pytorch_model.pt': model.state_dict()},
                        os.path.join(output_dir, 'training_config.bin'))
             self.tokenizer.save_vocabulary(save_directory=output_dir)
         self.logger.info('Saving models checkpoint to %s', output_dir)

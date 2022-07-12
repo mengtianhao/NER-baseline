@@ -3,7 +3,7 @@ import os
 
 
 class Model_config:
-    def __init__(self, task_name, classify_name, model_name="chinese-bert-wwm-ext"):
+    def __init__(self, task_name, classify_name, model_name="chinese-bert-wwm-ext", mid_struct='base'):
         # 项目路径
         self.project_dir = os.path.dirname(os.path.dirname(os.path.abspath(__file__)))
         # 预训练模型路径
@@ -22,6 +22,13 @@ class Model_config:
             self.model_type = 'albert'
         else:
             self.model_type = "bert"
+        # 下游结构
+        self.mid_struct = mid_struct
+        # 1.bilstm
+        self.num_layers = 1  # 下游层数
+        self.lstm_hidden = 256  # Bilstm隐藏层size
+        #
+        self.drop_prob = 0.1  # drop_out率
         # 模型保存路径
         self.output_dir = os.path.join(self.project_dir, 'data', 'output')
         # 测试集结果保存路径
@@ -35,7 +42,7 @@ class Model_config:
         # 初始化学习率
         self.learning_rate = 3e-5
         # 训练的epochs
-        self.epochs = 1
+        self.epochs = 5
         # Warmup预热学习率
         self.warmup_proportion = 0.1
         # 自上次模型在验证集上损失降低之后等待的时间

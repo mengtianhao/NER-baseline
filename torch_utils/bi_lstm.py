@@ -32,7 +32,7 @@ class BiLSTM(nn.Module):
         """
         embed = self.dropout(embed)
         max_len, batch_size, embed_size = embed.size()
-        embed = nn.utils.rnn.pack_padded_sequence(embed, mask.sum(0).long(), enforce_sorted=False)
+        embed = nn.utils.rnn.pack_padded_sequence(embed, mask.sum(0).long().cpu(), enforce_sorted=False)
         lstm_output, _ = self.bilstm(embed)  # (seq_len, batch_size, hidden_size*2)
         lstm_output, _ = nn.utils.rnn.pad_packed_sequence(lstm_output, total_length=max_len)
         lstm_output = lstm_output * mask.unsqueeze(-1)
